@@ -4,15 +4,17 @@ import { NextResponse } from 'next/server'
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
-const MODEL = process.env.FAL_MODEL ?? 'fal-ai/flux/dev'
+const MODEL = process.env.FAL_MODEL ?? 'fal-ai/f-lite/texture'
 
-const normalizePrompt = (prompt: string) =>
-  [
-    'Seamless tileable square material texture.',
-    'No text, no logo, no border, no perspective, no object photo.',
-    'Orthographic flat surface, evenly lit, usable as a repeating game or 3D material texture.',
-    prompt,
-  ].join(' ')
+const normalizeNumber = (value: unknown, fallback: number, min: number, max: number) => {
+  const numberValue = Number(value)
+
+  if (!Number.isFinite(numberValue)) {
+    return fallback
+  }
+
+  return Math.min(max, Math.max(min, numberValue))
+}
 
 const getImageUrl = (value: unknown) => {
   const data = value as {
@@ -25,16 +27,27 @@ const getImageUrl = (value: unknown) => {
 
 export async function POST(request: Request) {
   let prompt: string
+  let negativePrompt: string
+  let guidanceScale: number
+  let seed: number | undefined
 
   try {
-    const body = (await request.json()) as { prompt?: unknown }
+    const body = (await request.json()) as {
+      prompt?: unknown
+      negativePrompt?: unknown
+      guidanceScale?: unknown
+      seed?: unknown
+    }
     prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
+    negativePrompt = typeof body.negativePrompt === 'string' ? body.negativePrompt : ''
+    guidanceScale = normalizeNumber(body.guidanceScale, 3.5, 1, 20)
+    seed = body.seed === undefined || body.seed === null || body.seed === '' ? undefined : Math.floor(normalizeNumber(body.seed, 0, 0, 2147483647))
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
   if (!prompt) {
-    prompt = 'neutral seamless fabric texture'
+    prompt = 'abstract image'
   }
 
   if (!process.env.FAL_KEY) {
@@ -44,10 +57,13 @@ export async function POST(request: Request) {
   try {
     const result = await fal.subscribe(MODEL, {
       input: {
-        prompt: normalizePrompt(prompt),
+        prompt,
+        negative_prompt: negativePrompt,
         image_size: 'square_hd',
+        num_inference_steps: 28,
+        guidance_scale: guidanceScale,
+        seed,
         num_images: 1,
-        output_format: 'png',
         enable_safety_checker: true,
       },
       logs: false,
@@ -60,6 +76,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       source: 'fal',
+      model: MODEL,
       requestId: result.requestId,
       texture: {
         label: 'Fal Texture',
