@@ -205,6 +205,7 @@
 }
 
 .button-row {
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
 }
@@ -293,6 +294,11 @@
 .operation-node {
   border-color: #7886c7;
   background: #f7f8ff;
+}
+
+.image-node {
+  border-color: #6d8faa;
+  background: #f4fbff;
 }
 
 .node-preview {
@@ -474,6 +480,10 @@
   color: var(--text);
   font-family: var(--mono);
   text-transform: uppercase;
+}
+
+.operation-io.single-line {
+  grid-template-columns: 1fr;
 }
 
 .field-heading {

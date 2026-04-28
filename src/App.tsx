@@ -20,6 +20,7 @@ import {
   Boxes,
   Code2,
   Download,
+  Image as ImageIcon,
   Layers3,
   Play,
   Plus,
@@ -31,7 +32,13 @@ import {
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderTextureGraph } from './textureEngine'
-import type { TextureFlowEdge, TextureFlowNode, TextureNodeData, TextureOperation } from './types'
+import type {
+  BitmapTexture,
+  TextureFlowEdge,
+  TextureFlowNode,
+  TextureNodeData,
+  TextureOperation,
+} from './types'
 import {
   baseGraniteTexture,
   createVibeTexture,
@@ -80,6 +87,7 @@ const stripPreviewData = (data: TextureNodeData): TextureNodeData => {
     code: data.code,
     params: data.params,
     operation: data.operation,
+    imageUrl: data.imageUrl,
   }
 }
 
@@ -182,6 +190,61 @@ const requestVibeTexture = async (prompt: string): Promise<VibeTexture & { sourc
   }
 }
 
+const requestFalTexture = async (prompt: string) => {
+  const response = await fetch('/api/generate-image-texture', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ prompt }),
+  })
+
+  if (!response.ok) {
+    throw new Error('Fal image texture generation failed')
+  }
+
+  return (await response.json()) as {
+    source: 'fal'
+    texture: {
+      label: string
+      prompt: string
+      imageUrl: string
+    }
+  }
+}
+
+const getProxiedImageUrl = (imageUrl: string) => `/api/proxy-image?url=${encodeURIComponent(imageUrl)}`
+
+const loadBitmapTexture = async (imageUrl: string): Promise<BitmapTexture> => {
+  const response = await fetch(getProxiedImageUrl(imageUrl))
+
+  if (!response.ok) {
+    throw new Error('Failed to load texture image')
+  }
+
+  const blob = await response.blob()
+  const bitmap = await createImageBitmap(blob)
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+
+  if (!context) {
+    bitmap.close()
+    throw new Error('Canvas 2D context is unavailable')
+  }
+
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  context.drawImage(bitmap, 0, 0)
+  const imageData = context.getImageData(0, 0, bitmap.width, bitmap.height)
+  bitmap.close()
+
+  return {
+    width: imageData.width,
+    height: imageData.height,
+    data: imageData.data,
+  }
+}
+
 const getRenderSignature = (nodes: TextureFlowNode[], edges: TextureFlowEdge[], time: number) =>
   JSON.stringify({
     time,
@@ -214,6 +277,22 @@ const TextureCodeNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) =>
 ))
 
 TextureCodeNode.displayName = 'TextureCodeNode'
+
+const ImageTextureNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) => (
+  <div className={`texture-node image-node ${selected ? 'is-selected' : ''}`}>
+    <div className="node-preview">
+      {data.previewUrl ? <img src={data.previewUrl} alt="" draggable={false} /> : null}
+      <div className="operation-badge">image</div>
+    </div>
+    <div className="node-caption">
+      <ImageIcon size={13} aria-hidden="true" />
+      <span>{data.label}</span>
+    </div>
+    <Handle className="flow-handle" type="source" position={Position.Right} />
+  </div>
+))
+
+ImageTextureNode.displayName = 'ImageTextureNode'
 
 const OperationNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) => (
   <div className={`texture-node operation-node ${selected ? 'is-selected' : ''}`}>
@@ -251,6 +330,7 @@ CompoundNode.displayName = 'CompoundNode'
 
 const nodeTypes = {
   textureCode: TextureCodeNode,
+  imageNode: ImageTextureNode,
   operationNode: OperationNode,
   compoundNode: CompoundNode,
 }
@@ -261,6 +341,7 @@ function TextureCanvas({
   targetNodeId,
   size,
   time,
+  imageAssets,
   showError = false,
 }: {
   nodes: TextureFlowNode[]
@@ -268,6 +349,7 @@ function TextureCanvas({
   targetNodeId: string
   size: number
   time: number
+  imageAssets?: Record<string, BitmapTexture>
   showError?: boolean
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -287,6 +369,7 @@ function TextureCanvas({
       width: size,
       height: size,
       time,
+      imageAssets,
     })
     const context = canvas.getContext('2d')
 
@@ -294,7 +377,7 @@ function TextureCanvas({
     canvas.height = size
     context?.putImageData(result.imageData, 0, 0)
     setError(result.error)
-  }, [edges, nodes, size, targetNodeId, time])
+  }, [edges, imageAssets, nodes, size, targetNodeId, time])
 
   return (
     <div className="texture-canvas-wrap">
@@ -305,7 +388,7 @@ function TextureCanvas({
 }
 
 function AppWorkbench() {
-  const initialFlow = useMemo(() => loadInitialFlow(), [])
+  const initialFlow = useMemo(() => defaultFlow(), [])
   const [nodes, setNodes, onNodesChange] = useNodesState<TextureFlowNode>(initialFlow.nodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState<TextureFlowEdge>(initialFlow.edges)
   const [selectedNodeId, setSelectedNodeId] = useState(initialFlow.selectedNodeId)
@@ -313,8 +396,9 @@ function AppWorkbench() {
   const [newParamName, setNewParamName] = useState('')
   const [renderTick, setRenderTick] = useState(1)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [generationSource, setGenerationSource] = useState<'idle' | 'ai' | 'local'>('idle')
+  const [generationSource, setGenerationSource] = useState<'idle' | 'ai' | 'fal' | 'local'>('idle')
   const [nodePreviewUrls, setNodePreviewUrls] = useState<Record<string, string>>({})
+  const [imageAssets, setImageAssets] = useState<Record<string, BitmapTexture>>({})
   const nodesRef = useRef(nodes)
   const edgesRef = useRef(edges)
 
@@ -322,22 +406,71 @@ function AppWorkbench() {
   const previewNodeId = selectedNode?.id ?? nodes[0]?.id ?? ''
   const currentTime = renderTick * 0.23
   const previewSignature = useMemo(() => getRenderSignature(nodes, edges, currentTime), [currentTime, edges, nodes])
+  const imageNodeSources = useMemo(
+    () =>
+      JSON.stringify(
+        nodes
+          .filter((node) => node.data.kind === 'image' && node.data.imageUrl)
+          .map((node) => ({ id: node.id, imageUrl: node.data.imageUrl })),
+      ),
+    [nodes],
+  )
   const flowNodes = useMemo(
     () =>
       nodes.map((node) => ({
         ...node,
         data: {
           ...node.data,
-          previewUrl: nodePreviewUrls[node.id],
+          previewUrl:
+            nodePreviewUrls[node.id] ??
+            (node.data.kind === 'image' && node.data.imageUrl ? getProxiedImageUrl(node.data.imageUrl) : undefined),
         },
       })),
     [nodePreviewUrls, nodes],
   )
 
   useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      const savedFlow = loadInitialFlow()
+      setNodes(savedFlow.nodes)
+      setEdges(savedFlow.edges)
+      setSelectedNodeId(savedFlow.selectedNodeId)
+    })
+
+    return () => window.cancelAnimationFrame(frameId)
+  }, [setEdges, setNodes])
+
+  useEffect(() => {
     nodesRef.current = nodes
     edgesRef.current = edges
   }, [edges, nodes])
+
+  useEffect(() => {
+    const imageNodes = JSON.parse(imageNodeSources) as Array<{ id: string; imageUrl: string }>
+    let cancelled = false
+
+    void Promise.all(
+      imageNodes.map(async (node) => {
+        try {
+          return [node.id, await loadBitmapTexture(node.imageUrl)] as const
+        } catch {
+          return null
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) {
+        return
+      }
+
+      setImageAssets(
+        Object.fromEntries(entries.filter((entry): entry is readonly [string, BitmapTexture] => Boolean(entry))),
+      )
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [imageNodeSources])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -396,6 +529,7 @@ function AppWorkbench() {
         width: NODE_PREVIEW_SIZE,
         height: NODE_PREVIEW_SIZE,
         time: currentTime,
+        imageAssets,
       })
 
       context.putImageData(result.imageData, 0, 0)
@@ -412,7 +546,7 @@ function AppWorkbench() {
       cancelled = true
       window.cancelAnimationFrame(frameId)
     }
-  }, [currentTime, previewSignature])
+  }, [currentTime, imageAssets, previewSignature])
 
   const onConnect = useCallback(
     (connection: Connection) =>
@@ -498,6 +632,38 @@ function AppWorkbench() {
           type: 'textureCode',
           position: { x: 120 + offset, y: 300 + offset * 0.25 },
           data: toNodeData(texture),
+        }
+
+        setNodes((currentNodes) => [...currentNodes, nextNode])
+        setSelectedNodeId(id)
+      } finally {
+        setIsGenerating(false)
+      }
+    },
+    [nodes.length, setNodes, vibePrompt],
+  )
+
+  const addImageNode = useCallback(
+    async (prompt = vibePrompt) => {
+      setIsGenerating(true)
+
+      try {
+        const result = await requestFalTexture(prompt)
+        setGenerationSource('fal')
+        const id = makeId('image')
+        const offset = nodes.length * 34
+        const nextNode: TextureFlowNode = {
+          id,
+          type: 'imageNode',
+          position: { x: 150 + offset, y: 360 + offset * 0.2 },
+          data: {
+            kind: 'image',
+            label: result.texture.label,
+            prompt: result.texture.prompt,
+            code: '',
+            params: {},
+            imageUrl: result.texture.imageUrl,
+          },
         }
 
         setNodes((currentNodes) => [...currentNodes, nextNode])
@@ -629,6 +795,7 @@ function AppWorkbench() {
       width: 1024,
       height: 1024,
       time: currentTime,
+      imageAssets,
     })
     const canvas = document.createElement('canvas')
     const context = canvas.getContext('2d')
@@ -648,7 +815,7 @@ function AppWorkbench() {
       link.click()
       URL.revokeObjectURL(url)
     })
-  }, [currentTime, edges, nodes, previewNodeId, selectedNode])
+  }, [currentTime, edges, imageAssets, nodes, previewNodeId, selectedNode])
 
   return (
     <div className="app-shell">
@@ -665,6 +832,9 @@ function AppWorkbench() {
         <div className="topbar-actions">
           <button type="button" className="icon-button" onClick={() => addCodeNode()} title="Add code node">
             <Plus size={18} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon-button" onClick={() => addImageNode()} title="Generate Fal image texture">
+            <ImageIcon size={18} aria-hidden="true" />
           </button>
           <button type="button" className="icon-button" onClick={addOperationNode} title="Add operation node">
             <Blend size={18} aria-hidden="true" />
@@ -709,6 +879,7 @@ function AppWorkbench() {
                   targetNodeId={node.id}
                   size={THUMB_SIZE}
                   time={currentTime}
+                  imageAssets={imageAssets}
                 />
                 <span>
                   <strong>{node.data.label}</strong>
@@ -749,13 +920,24 @@ function AppWorkbench() {
               <Plus size={16} aria-hidden="true" />
               新节点
             </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => addImageNode(vibePrompt)}
+              disabled={isGenerating}
+            >
+              <ImageIcon size={16} aria-hidden="true" />
+              图片
+            </button>
           </div>
           <div className="ai-status">
             {generationSource === 'ai'
               ? 'AI SDK generated'
+              : generationSource === 'fal'
+                ? 'Fal image texture generated'
               : generationSource === 'local'
                 ? 'Local fallback generated'
-                : 'Uses /api/generate-texture when OPENAI_API_KEY is set'}
+                : 'Uses OpenAI for code nodes and Fal for image texture nodes'}
           </div>
         </div>
       </aside>
@@ -801,6 +983,7 @@ function AppWorkbench() {
               targetNodeId={previewNodeId}
               size={PREVIEW_SIZE}
               time={currentTime}
+              imageAssets={imageAssets}
               showError
             />
           ) : null}
@@ -854,6 +1037,24 @@ function AppWorkbench() {
                   <span>A</span>
                   <span>B</span>
                   <strong>{selectedNode.data.operation ?? 'mix'}</strong>
+                </div>
+              </div>
+            ) : selectedNode.data.kind === 'image' ? (
+              <div className="editor-field">
+                <div className="field-heading">
+                  <label htmlFor="node-image-url">Image Texture</label>
+                  <button type="button" className="ghost-button danger" onClick={deleteSelectedNode}>
+                    <Trash2 size={15} aria-hidden="true" />
+                    删除
+                  </button>
+                </div>
+                <input
+                  id="node-image-url"
+                  value={selectedNode.data.imageUrl ?? ''}
+                  onChange={(event) => updateSelectedData({ imageUrl: event.target.value })}
+                />
+                <div className="operation-io single-line">
+                  <strong>Fal bitmap source</strong>
                 </div>
               </div>
             ) : (

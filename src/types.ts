@@ -1,6 +1,6 @@
 import type { Edge, Node } from '@xyflow/react'
 
-export type TextureNodeKind = 'code' | 'operation' | 'compound'
+export type TextureNodeKind = 'code' | 'image' | 'operation' | 'compound'
 
 export type TextureOperation =
   | 'add'
@@ -19,10 +19,11 @@ export type TextureNodeData = {
   code: string
   params: Record<string, number>
   operation?: TextureOperation
+  imageUrl?: string
   previewUrl?: string
 }
 
-export type TextureFlowNode = Node<TextureNodeData, 'textureCode' | 'operationNode' | 'compoundNode'>
+export type TextureFlowNode = Node<TextureNodeData, 'textureCode' | 'imageNode' | 'operationNode' | 'compoundNode'>
 
 export type TextureFlowEdge = Edge
 
@@ -55,4 +56,10 @@ export type Color = {
 export type RenderResult = {
   imageData: ImageData
   error: string | null
+}
+
+export type BitmapTexture = {
+  width: number
+  height: number
+  data: Uint8ClampedArray
 }

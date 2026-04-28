@@ -1,4 +1,5 @@
 import type {
+  BitmapTexture,
   Color,
   RenderResult,
   TextureFlowEdge,
@@ -477,6 +478,21 @@ const makeErrorImage = (width: number, height: number, message: string): RenderR
   return { imageData, error: message }
 }
 
+const sampleBitmapTexture = (texture: BitmapTexture, uv: Vec2) => {
+  const u = fract(uv.x)
+  const v = fract(uv.y)
+  const x = Math.min(texture.width - 1, Math.max(0, Math.floor(u * texture.width)))
+  const y = Math.min(texture.height - 1, Math.max(0, Math.floor(v * texture.height)))
+  const index = (y * texture.width + x) * 4
+
+  return rgba(
+    texture.data[index] / 255,
+    texture.data[index + 1] / 255,
+    texture.data[index + 2] / 255,
+    texture.data[index + 3] / 255,
+  )
+}
+
 export const renderTextureGraph = ({
   nodes,
   edges,
@@ -484,6 +500,7 @@ export const renderTextureGraph = ({
   width,
   height,
   time = 0,
+  imageAssets = {},
 }: {
   nodes: TextureFlowNode[]
   edges: TextureFlowEdge[]
@@ -491,6 +508,7 @@ export const renderTextureGraph = ({
   width: number
   height: number
   time?: number
+  imageAssets?: Record<string, BitmapTexture>
 }): RenderResult => {
   const imageData = new ImageData(width, height)
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
@@ -530,6 +548,11 @@ export const renderTextureGraph = ({
 
       if (node.data.kind === 'compound') {
         return inputSamplers[0]?.(uv) ?? black
+      }
+
+      if (node.data.kind === 'image') {
+        const texture = imageAssets[nodeId]
+        return texture ? sampleBitmapTexture(texture, uv) : black
       }
 
       if (node.data.kind === 'operation') {
