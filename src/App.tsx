@@ -190,6 +190,8 @@ const requestVibeTexture = async (prompt: string): Promise<VibeTexture & { sourc
   }
 }
 
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
 const requestFalTexture = async (prompt: string) => {
   const response = await fetch('/api/generate-image-texture', {
     method: 'POST',
@@ -203,14 +205,51 @@ const requestFalTexture = async (prompt: string) => {
     throw new Error('Fal image texture generation failed')
   }
 
-  return (await response.json()) as {
+  const queued = (await response.json()) as {
     source: 'fal'
+    requestId: string
+    status: string
     texture: {
       label: string
       prompt: string
-      imageUrl: string
+      imageUrl?: string
     }
   }
+
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    await wait(2000)
+
+    const statusResponse = await fetch(
+      `/api/generate-image-texture?requestId=${encodeURIComponent(queued.requestId)}&prompt=${encodeURIComponent(queued.texture.prompt)}`,
+    )
+
+    if (!statusResponse.ok) {
+      throw new Error('Fal image texture generation failed')
+    }
+
+    const payload = (await statusResponse.json()) as {
+      source: 'fal'
+      status: string
+      texture?: {
+        label: string
+        prompt: string
+        imageUrl?: string
+      }
+    }
+
+    if (payload.status === 'COMPLETED' && payload.texture?.imageUrl) {
+      return {
+        source: 'fal' as const,
+        texture: {
+          label: payload.texture.label,
+          prompt: payload.texture.prompt,
+          imageUrl: payload.texture.imageUrl,
+        },
+      }
+    }
+  }
+
+  throw new Error('Fal image texture generation timed out')
 }
 
 const getProxiedImageUrl = (imageUrl: string) => `/api/proxy-image?url=${encodeURIComponent(imageUrl)}`

@@ -19,10 +19,10 @@ The UI calls `POST /api/generate-texture`. If `OPENAI_API_KEY` is configured, th
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-4.1-mini
 FAL_KEY=...
-FAL_MODEL=fal-ai/f-lite/texture
+FAL_MODEL=fal-ai/flux/dev
 ```
 
-OpenAI is used for procedural code-node generation. Fal is used for bitmap image generation through `POST /api/generate-image-texture`; the API passes the user prompt through without adding texture-only wording.
+OpenAI is used for procedural code-node generation. Fal is used for bitmap image generation through `POST /api/generate-image-texture`; the API passes the user prompt through without adding texture-only wording. Fal jobs are submitted to the queue first, then polled with `GET /api/generate-image-texture?requestId=...` so production deployments do not block on a long single request.
 
 ## Node IO Contract: `texture-code-v1`
 
