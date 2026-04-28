@@ -85,6 +85,16 @@ const upstream = input(0, black)
 return add(mul(upstream, 0.35), rgb(ripple, ripple, ripple))
 ```
 
+## Operation Nodes
+
+Operation nodes have two texture inputs, `A` and `B`, and one texture output. Supported operations are:
+
+```js
+add, sub, mul, div, mix, multiply, screen, overlay
+```
+
+Use operation nodes when you want graph-level texture math without writing code inside a code node.
+
 ## Deploy
 
 This is a standard Next.js app and can be deployed to Vercel. Add `OPENAI_API_KEY` in Vercel Project Settings if you want live AI generation in production.

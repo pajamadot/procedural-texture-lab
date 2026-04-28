@@ -3,6 +3,7 @@ import type {
   RenderResult,
   TextureFlowEdge,
   TextureFlowNode,
+  TextureOperation,
   Vec2,
   Vec2Input,
 } from './types'
@@ -409,6 +410,38 @@ const helpers = {
   overlay,
 }
 
+const getOperationFallback = (operation: TextureOperation) => {
+  if (operation === 'mul' || operation === 'div' || operation === 'multiply') {
+    return white
+  }
+
+  return black
+}
+
+const applyTextureOperation = (operation: TextureOperation, a: Color, b: Color, amount: number) => {
+  const normalizedAmount = saturate(amount)
+
+  switch (operation) {
+    case 'add':
+      return mixColor(a, toColor(add(a, b)), normalizedAmount)
+    case 'sub':
+      return mixColor(a, toColor(sub(a, b)), normalizedAmount)
+    case 'mul':
+      return mixColor(a, toColor(mul(a, b)), normalizedAmount)
+    case 'div':
+      return mixColor(a, toColor(div(a, b)), normalizedAmount)
+    case 'multiply':
+      return multiply(a, b, normalizedAmount)
+    case 'screen':
+      return screen(a, b, normalizedAmount)
+    case 'overlay':
+      return overlay(a, b, normalizedAmount)
+    case 'mix':
+    default:
+      return mixColor(a, b, normalizedAmount)
+  }
+}
+
 const compileTextureFunction = (code: string): UserTextureFunction => {
   const validationError = validateTextureCode(code)
 
@@ -497,6 +530,15 @@ export const renderTextureGraph = ({
 
       if (node.data.kind === 'compound') {
         return inputSamplers[0]?.(uv) ?? black
+      }
+
+      if (node.data.kind === 'operation') {
+        const operation = node.data.operation ?? 'mix'
+        const amount = node.data.params.amount ?? 1
+        const a = inputSamplers[0]?.(uv) ?? black
+        const b = inputSamplers[1]?.(uv) ?? getOperationFallback(operation)
+
+        return applyTextureOperation(operation, a, b, amount)
       }
 
       let userFunction = compiled.get(nodeId)

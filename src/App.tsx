@@ -16,6 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import {
+  Blend,
   Boxes,
   Code2,
   Download,
@@ -28,9 +29,9 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderTextureGraph } from './textureEngine'
-import type { TextureFlowEdge, TextureFlowNode, TextureNodeData } from './types'
+import type { TextureFlowEdge, TextureFlowNode, TextureNodeData, TextureOperation } from './types'
 import {
   baseGraniteTexture,
   createVibeTexture,
@@ -42,6 +43,20 @@ const STORAGE_KEY = 'procedural-texture-workbench:v1'
 const PREVIEW_SIZE = 256
 const THUMB_SIZE = 72
 const NODE_PREVIEW_SIZE = 128
+
+const operationOptions: Array<{ value: TextureOperation; label: string }> = [
+  { value: 'add', label: 'Add' },
+  { value: 'sub', label: 'Subtract' },
+  { value: 'mul', label: 'Multiply' },
+  { value: 'div', label: 'Divide' },
+  { value: 'mix', label: 'Mix' },
+  { value: 'multiply', label: 'Blend Multiply' },
+  { value: 'screen', label: 'Blend Screen' },
+  { value: 'overlay', label: 'Blend Overlay' },
+]
+
+const getOperationLabel = (operation: TextureOperation) =>
+  operationOptions.find((option) => option.value === operation)?.label ?? 'Operation'
 
 type StoredFlow = {
   nodes: TextureFlowNode[]
@@ -64,6 +79,7 @@ const stripPreviewData = (data: TextureNodeData): TextureNodeData => {
     prompt: data.prompt,
     code: data.code,
     params: data.params,
+    operation: data.operation,
   }
 }
 
@@ -166,7 +182,24 @@ const requestVibeTexture = async (prompt: string): Promise<VibeTexture & { sourc
   }
 }
 
-const TextureCodeNode = ({ data, selected }: NodeProps<TextureFlowNode>) => (
+const getRenderSignature = (nodes: TextureFlowNode[], edges: TextureFlowEdge[], time: number) =>
+  JSON.stringify({
+    time,
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      data: stripPreviewData(node.data),
+    })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle,
+      targetHandle: edge.targetHandle,
+    })),
+  })
+
+const TextureCodeNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) => (
   <div className={`texture-node ${selected ? 'is-selected' : ''}`}>
     <Handle className="flow-handle" type="target" position={Position.Left} />
     <div className="node-preview">
@@ -178,9 +211,29 @@ const TextureCodeNode = ({ data, selected }: NodeProps<TextureFlowNode>) => (
     </div>
     <Handle className="flow-handle" type="source" position={Position.Right} />
   </div>
-)
+))
 
-const CompoundNode = ({ data, selected }: NodeProps<TextureFlowNode>) => (
+TextureCodeNode.displayName = 'TextureCodeNode'
+
+const OperationNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) => (
+  <div className={`texture-node operation-node ${selected ? 'is-selected' : ''}`}>
+    <Handle className="flow-handle op-handle op-handle-a" id="a" type="target" position={Position.Left} />
+    <Handle className="flow-handle op-handle op-handle-b" id="b" type="target" position={Position.Left} />
+    <div className="node-preview">
+      {data.previewUrl ? <img src={data.previewUrl} alt="" draggable={false} /> : null}
+      <div className="operation-badge">{data.operation ?? 'mix'}</div>
+    </div>
+    <div className="node-caption">
+      <Blend size={13} aria-hidden="true" />
+      <span>{data.label}</span>
+    </div>
+    <Handle className="flow-handle" type="source" position={Position.Right} />
+  </div>
+))
+
+OperationNode.displayName = 'OperationNode'
+
+const CompoundNode = memo(({ data, selected }: NodeProps<TextureFlowNode>) => (
   <div className={`texture-node compound-node ${selected ? 'is-selected' : ''}`}>
     <Handle className="flow-handle" type="target" position={Position.Left} />
     <div className="node-preview node-preview-empty">
@@ -192,10 +245,13 @@ const CompoundNode = ({ data, selected }: NodeProps<TextureFlowNode>) => (
     </div>
     <Handle className="flow-handle" type="source" position={Position.Right} />
   </div>
-)
+))
+
+CompoundNode.displayName = 'CompoundNode'
 
 const nodeTypes = {
   textureCode: TextureCodeNode,
+  operationNode: OperationNode,
   compoundNode: CompoundNode,
 }
 
@@ -259,10 +315,13 @@ function AppWorkbench() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationSource, setGenerationSource] = useState<'idle' | 'ai' | 'local'>('idle')
   const [nodePreviewUrls, setNodePreviewUrls] = useState<Record<string, string>>({})
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? nodes[0]
   const previewNodeId = selectedNode?.id ?? nodes[0]?.id ?? ''
   const currentTime = renderTick * 0.23
+  const previewSignature = useMemo(() => getRenderSignature(nodes, edges, currentTime), [currentTime, edges, nodes])
   const flowNodes = useMemo(
     () =>
       nodes.map((node) => ({
@@ -276,25 +335,34 @@ function AppWorkbench() {
   )
 
   useEffect(() => {
-    const stored: StoredFlow = {
-      selectedNodeId,
-      nodes: nodes.map((node) => ({
-        id: node.id,
-        type: node.type,
-        position: node.position,
-        data: stripPreviewData(node.data),
-      })) as TextureFlowNode[],
-      edges: edges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        sourceHandle: edge.sourceHandle,
-        targetHandle: edge.targetHandle,
-        type: edge.type,
-      })),
-    }
+    nodesRef.current = nodes
+    edgesRef.current = edges
+  }, [edges, nodes])
 
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      const stored: StoredFlow = {
+        selectedNodeId,
+        nodes: nodes.map((node) => ({
+          id: node.id,
+          type: node.type,
+          position: node.position,
+          data: stripPreviewData(node.data),
+        })) as TextureFlowNode[],
+        edges: edges.map((edge) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+          type: edge.type,
+        })),
+      }
+
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
+    }, 250)
+
+    return () => window.clearTimeout(timeoutId)
   }, [edges, nodes, selectedNodeId])
 
   useEffect(() => {
@@ -312,10 +380,18 @@ function AppWorkbench() {
 
     const nextPreviews: Record<string, string> = {}
 
-    for (const node of nodes) {
+    const renderNodes = nodesRef.current.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: { x: 0, y: 0 },
+      data: stripPreviewData(node.data),
+    })) as TextureFlowNode[]
+    const renderEdges = edgesRef.current
+
+    for (const node of renderNodes) {
       const result = renderTextureGraph({
-        nodes,
-        edges,
+        nodes: renderNodes,
+        edges: renderEdges,
         targetNodeId: node.id,
         width: NODE_PREVIEW_SIZE,
         height: NODE_PREVIEW_SIZE,
@@ -336,7 +412,7 @@ function AppWorkbench() {
       cancelled = true
       window.cancelAnimationFrame(frameId)
     }
-  }, [currentTime, edges, nodes])
+  }, [currentTime, previewSignature])
 
   const onConnect = useCallback(
     (connection: Connection) =>
@@ -386,17 +462,27 @@ function AppWorkbench() {
     try {
       const texture = await requestVibeTexture(vibePrompt || selectedNode.data.prompt)
       setGenerationSource(texture.source)
-      updateSelectedData({
-        kind: 'code',
-        label: texture.label,
-        prompt: texture.prompt,
-        code: texture.code,
-        params: texture.params,
-      })
+      setNodes((currentNodes) =>
+        currentNodes.map((node) =>
+          node.id === selectedNode.id
+            ? {
+                ...node,
+                type: 'textureCode',
+                data: {
+                  kind: 'code',
+                  label: texture.label,
+                  prompt: texture.prompt,
+                  code: texture.code,
+                  params: texture.params,
+                },
+              }
+            : node,
+        ),
+      )
     } finally {
       setIsGenerating(false)
     }
-  }, [selectedNode, updateSelectedData, vibePrompt])
+  }, [selectedNode, setNodes, vibePrompt])
 
   const addCodeNode = useCallback(
     async (prompt = vibePrompt) => {
@@ -422,6 +508,27 @@ function AppWorkbench() {
     },
     [nodes.length, setNodes, vibePrompt],
   )
+
+  const addOperationNode = useCallback(() => {
+    const id = makeId('operation')
+    const operation: TextureOperation = 'mix'
+    const nextNode: TextureFlowNode = {
+      id,
+      type: 'operationNode',
+      position: { x: 260 + nodes.length * 30, y: 250 + nodes.length * 10 },
+      data: {
+        kind: 'operation',
+        label: getOperationLabel(operation),
+        prompt: 'texture operation node',
+        code: '',
+        params: { amount: 0.5 },
+        operation,
+      },
+    }
+
+    setNodes((currentNodes) => [...currentNodes, nextNode])
+    setSelectedNodeId(id)
+  }, [nodes.length, setNodes])
 
   const addCompoundNode = useCallback(() => {
     const id = makeId('compound')
@@ -559,6 +666,9 @@ function AppWorkbench() {
           <button type="button" className="icon-button" onClick={() => addCodeNode()} title="Add code node">
             <Plus size={18} aria-hidden="true" />
           </button>
+          <button type="button" className="icon-button" onClick={addOperationNode} title="Add operation node">
+            <Blend size={18} aria-hidden="true" />
+          </button>
           <button type="button" className="icon-button" onClick={addCompoundNode} title="Add compound node">
             <Boxes size={18} aria-hidden="true" />
           </button>
@@ -671,7 +781,9 @@ function AppWorkbench() {
             position="bottom-right"
             pannable
             zoomable
-            nodeColor={(node) => (node.type === 'compoundNode' ? '#d98c2f' : '#2c8b74')}
+            nodeColor={(node) =>
+              node.type === 'compoundNode' ? '#d98c2f' : node.type === 'operationNode' ? '#6b7fd7' : '#2c8b74'
+            }
           />
         </ReactFlow>
       </main>
@@ -705,23 +817,64 @@ function AppWorkbench() {
               />
             </div>
 
-            <div className="editor-field">
-              <div className="field-heading">
-                <label htmlFor="node-code">Code</label>
-                <button type="button" className="ghost-button danger" onClick={deleteSelectedNode}>
-                  <Trash2 size={15} aria-hidden="true" />
-                  删除
-                </button>
+            {selectedNode.data.kind === 'operation' ? (
+              <div className="editor-field">
+                <div className="field-heading">
+                  <label htmlFor="node-operation">Operation</label>
+                  <button type="button" className="ghost-button danger" onClick={deleteSelectedNode}>
+                    <Trash2 size={15} aria-hidden="true" />
+                    删除
+                  </button>
+                </div>
+                <select
+                  id="node-operation"
+                  className="operation-select"
+                  value={selectedNode.data.operation ?? 'mix'}
+                  onChange={(event) => {
+                    const operation = event.target.value as TextureOperation
+                    updateSelectedData({
+                      operation,
+                      label: getOperationLabel(operation),
+                      params: {
+                        amount:
+                          operation === 'add' || operation === 'sub' || operation === 'mul' || operation === 'div'
+                            ? 1
+                            : (selectedNode.data.params.amount ?? 0.5),
+                      },
+                    })
+                  }}
+                >
+                  {operationOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="operation-io">
+                  <span>A</span>
+                  <span>B</span>
+                  <strong>{selectedNode.data.operation ?? 'mix'}</strong>
+                </div>
               </div>
-              <textarea
-                id="node-code"
-                className="code-editor"
-                spellCheck={false}
-                value={selectedNode.data.code}
-                onChange={(event) => updateSelectedData({ code: event.target.value })}
-                disabled={selectedNode.data.kind === 'compound'}
-              />
-            </div>
+            ) : (
+              <div className="editor-field">
+                <div className="field-heading">
+                  <label htmlFor="node-code">Code</label>
+                  <button type="button" className="ghost-button danger" onClick={deleteSelectedNode}>
+                    <Trash2 size={15} aria-hidden="true" />
+                    删除
+                  </button>
+                </div>
+                <textarea
+                  id="node-code"
+                  className="code-editor"
+                  spellCheck={false}
+                  value={selectedNode.data.code}
+                  onChange={(event) => updateSelectedData({ code: event.target.value })}
+                  disabled={selectedNode.data.kind === 'compound'}
+                />
+              </div>
+            )}
 
             <div className="panel-section params-section">
               <div className="section-title">

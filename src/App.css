@@ -168,6 +168,7 @@
 
 .prompt-input,
 .editor-field input,
+.operation-select,
 .add-param-row input,
 .param-row input,
 .code-editor {
@@ -179,6 +180,7 @@
 
 .prompt-input,
 .editor-field input,
+.operation-select,
 .add-param-row input,
 .param-row input {
   background: #fff;
@@ -194,6 +196,7 @@
 
 .prompt-input:focus,
 .editor-field input:focus,
+.operation-select:focus,
 .add-param-row input:focus,
 .param-row input:focus,
 .code-editor:focus {
@@ -287,6 +290,11 @@
   background: #fff3df;
 }
 
+.operation-node {
+  border-color: #7886c7;
+  background: #f7f8ff;
+}
+
 .node-preview {
   display: grid;
   width: 100%;
@@ -314,6 +322,26 @@
   image-rendering: pixelated;
 }
 
+.operation-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.56);
+  border-radius: 6px;
+  background: rgba(18, 22, 28, 0.72);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 7px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .node-preview-empty {
   color: color-mix(in srgb, var(--amber) 70%, #533716);
 }
@@ -339,6 +367,14 @@
   height: 10px;
   border: 2px solid #fff;
   background: var(--accent);
+}
+
+.op-handle-a {
+  top: 34%;
+}
+
+.op-handle-b {
+  top: 66%;
 }
 
 .texture-canvas-wrap {
@@ -407,6 +443,37 @@
   height: 38px;
   margin-top: 8px;
   padding: 0 10px;
+}
+
+.operation-select {
+  height: 38px;
+  margin-top: 8px;
+  padding: 0 10px;
+}
+
+.operation-io {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.operation-io span,
+.operation-io strong {
+  display: grid;
+  min-height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operation-io strong {
+  color: var(--text);
+  font-family: var(--mono);
+  text-transform: uppercase;
 }
 
 .field-heading {
